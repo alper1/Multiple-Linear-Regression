@@ -1,0 +1,375 @@
+---
+title: "HousePriceProject"
+output: word_document
+---
+
+## Description of Dataset and Objective
+
+This dataset contains house sale prices for King County, which includes Seattle. It includes homes sold between May 2014 and May 2015.
+
+Here we have 21 columns and 21613 rows. 20 of them are quantitative variables, and 1 of them is qualitative variables. We are going to work on some variables in order to have better prediction and performance.
+
+"id"= Unique identification for a house
+"date"= Date house was sold
+"price"= Price is prediction targe
+"bedrooms"= Number of Bedrooms
+"bathrooms"= Number of bathrooms ( .5 accounts for a room with a toilet but no shower)
+"sqft_living"= Square footage of the apartments interior living space
+"sqft_lot"= Square footage of the land space 
+"floors"= Total floors (levels) in house
+"waterfront"= House which has a view to a waterfront
+"view"= An index from 0 to 4 of how good the view of the property was, 0 - lowest, 4 - highest
+"condition"= An index from 1 to 5 on the condition of the apartment, 1 - lowest, 5 - highest
+"grade"= An index from 1 to 13, where 1-3 falls short of building construction and design, 7 has an average level of construction and design, and 11-13 have a high quality level of construction and design
+"sqft_above"= The square footage of the interior housing space that is above ground level 
+"sqft_basement"= The square footage of the interior housing space that is below ground level
+"yr_built"= Built Year
+"yr_renovated"= Year when house was renovated
+"zipcode"= zip
+"lat"= Latitude coordinate
+"long"= Longitude coordinate
+"sqft_living15"= Average sqft_living of the 15th nearest neighboors
+"sqft_lot15"= Average sqft_lot of the 15th nearest neighboors
+
+In this project we want to create a predictive model which allows us to predict new observations correctly from a set of information of house features.
+
+##Required Libraries
+
+```{r library}
+
+library("lubridate") #for date format correction
+library("car")
+library("corrplot")
+library("MASS")
+library("mice") #missing data - outliers correction
+library("caret")
+library("lattice")
+
+#library("DAAG")#crossvalidation
+#library("bootstrap")#crossvalidation
+
+```
+
+##Download of the data set and data correction
+
+```{r download and correction}
+#Data download
+
+data_house = read.csv("kc_house_data.csv",sep=",",dec=".")
+attach(data_house)
+
+#Excluding ID, as it is independent variable of price
+data_house <- data_house[, c(-1)]
+
+#transforming date into date format
+data_corr <- vector(mode="character",length=length(data_house$date))
+data_corr = as.vector(data_house$date)
+data_corr <- substr(data_corr,1,nchar(data_corr)-7)
+data_house[,colnames(data_house)=="date"] <- ymd(data_corr)
+
+#showing the treated data set       
+data_house[1:10,]
+summary(data_house)
+
+```
+
+
+
+Firstly, we perform a univariate analysis to detect possible atypical values that may hinder when we will want to look for an adequate model. For this, we made a Box-whisker plot and we look at those observations that are further away from the third quartile, so we will consider like missing values those observations that exceed the 95th percentile. To deal these missing values we used the mice function.
+```{r}
+#suspected outliers with summary
+ #price, bedrooms, bathrooms, sqft_living, sqft_lot, sqft_basement, sqft_living15, sqft_lot15
+
+#graphcs analysis of outliers
+boxplot(data_house$price) #there are higher prices, however it could be true
+    data_house[data_house[,"price"]>6000000,]
+boxplot(data_house$bedrooms) # 1 clear outiler
+    data_house[data_house[,"bedrooms"]>30,]
+boxplot(data_house$bathrooms)#no clear outlier
+    data_house[data_house[,"bathrooms"]>7,]
+boxplot(data_house$sqft_living) #2 clear outlier
+  data_house[data_house[,"sqft_living"]>12000,]
+boxplot(data_house$sqft_lot) #1 clear outlier
+  data_house[data_house[,"sqft_lot"]>1500000,]
+boxplot(data_house$sqft_basement) #2 clear outiliers
+  data_house[data_house[,"sqft_basement"]>4000,]
+boxplot(data_house$sqft_living15)#no clear outlier
+boxplot(data_house$sqft_lot15)# 3 clear outiliers
+  data_house[data_house[,"sqft_lot15"]>500000,]
+
+  
+  
+data_house1 <- data_house  
+data_house1$price[price>6000000] <- NA    
+data_house1$bedrooms[bedrooms>30] <- NA
+data_house1$sqft_living[sqft_living>12000] <-NA
+data_house1$sqft_lot[sqft_lot>1500000] <- NA
+data_house1$sqft_basement[sqft_basement>4000] <- NA
+data_house1$sqft_lot15[sqft_lot15>500000] <- NA
+
+summary(data_house1)
+house <- mice(data_house1[,-1], m=1,method='cart', maxit=1, seed=0)
+data_house1 <-complete(house)
+data_house1$date <- data_house[,1]
+summary(data_house1)
+
+data_house<- data_house1
+
+##correcting leverage
+
+#data_house <- data_house[c( ??? ),]
+
+
+```
+
+
+
+
+##Dataset dependence analysis: In the correlation matrix we can see the degree of relationship between variables two to two.. In our case, sqft_living is highly correlated with sqft_above, bathrooms, grade and dqft_living15. It is the variable that is most correlated with other variables. That two variables are correlated does not imply that there is a causal relationship (However, if there is a causal relationship, it will imply that both variables are highly correlated). In the next steps of this project we will analyze if these high correlations are due to a causal relationship, which should be treated to avoid multicollinearity problems.
+
+```{r correlation}
+#scatterplotMatrix(data_house)
+cor_house <- cor(data_house[,c(-20, -7)])#excluding qualitative and binary variable to correlation plot
+corrplot(cor_house, method="pie")
+```
+
+Variables that are more correlated with the price
+ - sqft_living, grade, sqft_above, sqft_linving15
+
+Variables with strong correlation with each other
+ - sqft_living and sqft_above 
+ - sqft_living and grade
+ - sqft_living and sqft_living15
+ - sqft_living and bedrooms
+ - sqft_living and bathrooms
+ - sqft_lot and sqft_lot15
+ - zipcode and long
+ 
+
+##Model construction: Once the most atypical data has been purified and the correlation between the variables studied a little, the construction of the model is carried out, where the price of the housing will be used as the variable of response, and the explanatory variables all the rest.
+
+```{r model with all variables}
+mod_price_comp <- lm(price ~ ., data = data_house)
+summary(mod_price_comp)
+```
+
+The model with all variables results give an R² 0.701, R²Adj 0.7008, sqft_lot is no significant to the model
+
+We have variables that are dependent on each other:
+- sqft_living = sqft_above + sqft_basement (so here we have multicollinearity that should avoid)
+- sqft_living have strong correlation with some variables
+- zipcode indicates location and long with lat also do that, so the combination of lat and long give the same information as zipcode
+
+Considering the points above, let's starting with 2 models: 
+1 - without zipcode
+2 - without lat and long
+
+And then try the best one without:
+1.1 - sqft_living
+1.2 - sqft_above and sqft_basement
+
+```{r model selection}
+mod_price1 <- lm(price ~ .-zipcode, data = data_house)
+
+mod_price2 <- lm(price ~ .-lat -long, data = data_house)
+
+modBIC_back1 <- stepAIC(mod_price1, k = log(nrow(data_house)), trace=0, direction = "backward")
+summary(modBIC_back1)
+
+modBIC_back2 <- stepAIC(mod_price2, k = log(nrow(data_house)), trace=0, direction = "backward")
+summary(modBIC_back2)
+
+compareCoefs (modBIC_back1, modBIC_back2)
+
+##method forward were giving methods with more complex but with almost the same accuracy, therefor we decide to work with backward
+
+```
+model 1
+Residual standard error: 196000 on 21596 degrees of freedom
+Multiple R-squared:  0.7033,	Adjusted R-squared:  0.7031 
+F-statistic:  3200 on 16 and 21596 DF,  p-value: < 2.2e-16
+
+model 2
+Residual standard error: 209900 on 21598 degrees of freedom
+Multiple R-squared:  0.6597,	Adjusted R-squared:  0.6595 
+F-statistic:  2991 on 14 and 21598 DF,  p-value: < 2.2e-16
+
+The model with lat and long is better than with only zipcode.
+Lat and Long indicates the locartion of the house, which seems to be relevant to the model, however as a number splited into 2 colunms its more dificult to make inferences in the model.
+Therefore, let's try to transforming it into categorical variable and analyze if it contributes not only for the simplicity of interpretation, but also for its accuracy.
+```{r}
+mod_price1.1 <- lm(price ~ .-zipcode -sqft_living, data = data_house)
+
+mod_price2.1 <- lm(price ~ .-zipcode -sqft_above -sqft_basement, data = data_house)
+
+modBIC_back1.1 <- stepAIC(mod_price1.1, k = log(nrow(data_house)), trace=0, direction = "backward")
+summary(modBIC_back1)
+
+modBIC_back2.1 <- stepAIC(mod_price2.1, k = log(nrow(data_house)), trace=0, direction = "backward")
+summary(modBIC_back2)
+
+compareCoefs (modBIC_back1.1, modBIC_back2.1)
+
+```
+modBIC_back1.1
+Residual standard error: 196000 on 21596 degrees of freedom
+Multiple R-squared:  0.7033,	Adjusted R-squared:  0.7031 
+F-statistic:  3200 on 16 and 21596 DF,  p-value: < 2.2e-16
+
+modBIC_back2.1
+Residual standard error: 209900 on 21598 degrees of freedom
+Multiple R-squared:  0.6597,	Adjusted R-squared:  0.6595 
+F-statistic:  2991 on 14 and 21598 DF,  p-value: < 2.2e-16
+
+The better solution is removing only sqft_living because it has a smaller effect in the model.
+
+
+```{r lat and long into categorical}
+data_house2 <- data_house
+location <- vector(mode="character",length=length(data_house2$lat))
+location[data_house2$lat<47.49 & data_house2$long < -122] <- "NORTHWEST"
+location[data_house2$lat<47.49 & data_house2$long >= -122] <- "NORTHEAST"
+location[data_house2$lat>=47.49 & data_house2$long < -122] <- "SOUTHWEST"
+location[data_house2$lat>=47.49 & data_house2$long >= -122] <- "SOUTHEAST"
+
+colnames(data_house2)[colnames(data_house2)=="lat"] <- "location"
+data_house2[,colnames(data_house2)=="location"] <- factor(location)
+
+data_house2$long <- NULL
+summary(data_house2)
+
+##transforming yr_built as binary
+data_house3 <- data_house2
+data_house3$yr_renovated_bi <- 0
+data_house3$yr_renovated_bi[data_house2$yr_renovated>0] <- 1 
+
+##tranforming built with renovated
+
+data_house3$yr_built_re <- data_house3$yr_renovated - data_house3$yr_built
+data_house3$yr_built_re[data_house3$yr_built_re<0] <- 0
+data_house3$yr_built_re <- data_house3$yr_built_re + data_house3$yr_built
+
+data_house3$yr_renovated <- NULL
+
+##testing model
+
+##transformation on lat and long into location
+mod_price3 <- lm(price ~ .-zipcode -sqft_living, data = data_house2)
+##transformation on lat and long into location + tranformation yr_build and yr_renovated
+mod_price4 <- lm(price ~ .-zipcode -sqft_living, data = data_house3)
+
+modBIC_back3 <- stepAIC(mod_price3, k = log(nrow(data_house2)), trace=0, direction = "backward")
+summary(modBIC_back3)
+
+modBIC_back4 <- stepAIC(mod_price4, k = log(nrow(data_house3)), trace=0, direction = "backward")
+summary(modBIC_back4)
+
+compareCoefs (modBIC_back3, modBIC_back4,modBIC_back1.1)
+
+anova(modBIC_back3)
+
+## as p-value yr_renovated with anova is almost 0.05 we will remove it 
+modBIC_back3 <- lm(formula = price ~ bedrooms + bathrooms + waterfront + view + 
+    condition + grade + sqft_above + sqft_basement + yr_built + location + sqft_living15 + date, data = data_house2)
+
+```
+OBS: Models
+modBIC_back1.1
+Residual standard error: 196000 on 21596 degrees of freedom
+Multiple R-squared:  0.7033,	Adjusted R-squared:  0.7031 
+F-statistic:  3200 on 16 and 21596 DF,  p-value: < 2.2e-16
+
+mod_back3 lat and long into categorical
+Residual standard error: 192800 on 21597 degrees of freedom
+Multiple R-squared:  0.713,	Adjusted R-squared:  0.7128 
+F-statistic:  3576 on 15 and 21597 DF,  p-value: < 2.2e-16
+
+
+##Best Model
+By the all the analysis, by now, the best model is mod_back3:
+
+##Assumptions
+Now that we have sected a model that best mach the conditions of accuracy and simplicity, we need to verifying its correctness. For that 4 assumptions should be satisfyied: Linearity,	Homoscedasticity, Normality and Independence of the errors
+
+```{r}
+par(mfrow = c(2, 2))
+plot(modBIC_back3, c(1,2,3)) #1-Linearity; 2-Normality; 3-Homoscedasticity
+plot(modBIC_back3$residuals, type = "o") #4-Independence of the errors
+
+durbinWatsonTest(modBIC_back3)
+?durbinWatsonTest
+
+```
+
+##Model diagnostic Results
+1- Linearity - Satisfied
+2- Normality - Failed
+3- Homoscedasticity - Failed
+4- Independence of the errors - Satisfied
+
+Let's do some more diagnostic before try to solve the problems above
+
+##Multicollinearity VIF
+A previous analysis was done with correlation matrix, however it only inspect pair by pair correlations. In order to have a deeper analysis, we also need indentify how linearly dependent is Xj  with the other predictors and Variance Inflation Factor (VIF) is a great approach for that.
+
+```{r VIF}
+cor_house <- cor(data_house2[,c("price", "bedrooms","bathrooms","view", "condition","grade", "sqft_above","sqft_basement","yr_built")])#excluding qualitative and binary variable to correlation plot
+corrplot(cor_house, method="pie")
+
+vif(modBIC_back3)
+
+```
+As the largest VIF is smaller than 5 the model has no problematic amount of multicollinearity.
+
+## Outliers and high-leverage points
+
+```{r}
+#Leverage expected value
+summary(modBIC_back3)
+p = 14
+levg = (p + 1) / nrow(data_house2)
+
+plot(modBIC_back3, 5)
+
+```
+```{r cooks distance}
+
+cooksd <- cooks.distance(modBIC_back3)
+influential <- as.numeric(names(cooksd)[(cooksd > 10*mean(cooksd, na.rm=T))])  # influential row numbers
+data_house2[influential, ]
+plot(cooksd)
+```
+
+```{r outlier test}
+outlierTest(modBIC_back3)
+
+```
+
+##Look for failure causes
+```{r}
+par(mfrow = c(3, 4))
+termplot(modBIC_back3, partial.resid = TRUE)
+
+```
+
+
+```{r}
+sum <- summary(powerTransform(modBIC_back3))
+sum$result
+#Lambda indicates that the best transformation is log
+log_mod <- lm(log(abs(price)) ~ .-sqft_living-id-floors-sqft_lot-zipcode-sqft_living15, data = data_house2)
+
+summary(log_mod)
+compareCoefs (log_mod, modBIC_back3)
+summary(modBIC_back3)
+
+```
+
+```{r}
+par(mfrow = c(1, 1))
+plot(log_mod, c(2,3)) #1-Linearity; 2-Normality; 3-Homoscedasticity
+
+
+```
+
+
